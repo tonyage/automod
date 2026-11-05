@@ -1,0 +1,61 @@
+# Runs the model server on Linux with an NVIDIA GPU. On a Mac, run
+# ./serve-mac.sh instead. Which model is pinned in model.env.
+#
+#   docker compose up -d
+
+# Fixed, so volumes and the network keep their names if this folder is renamed
+name: automod
+
+services:
+  model:
+    # NVIDIA build. Others with the same number: server-b11429 (CPU only),
+    # server-vulkan-b11429 (AMD and other GPUs), server-intel-b11429 (Intel)
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b11429
+    restart: unless-stopped
+    # One NVIDIA GPU; needs the NVIDIA Container Toolkit on the host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    env_file: model.env
+    environment:
+      # Where LLAMA_ARG_MODEL_URL is downloaded to. Without a path, llama.cpp
+      # ignores the URL and starts with no model.
+      LLAMA_ARG_MODEL: /models/model.gguf
+      # Room for 4 requests at once, about 4,000 tokens each
+      LLAMA_ARG_N_PARALLEL: 4
+      LLAMA_ARG_CTX_SIZE: 16384
+      # If the model is bigger than the GPU's memory, llama.cpp keeps as much
+      # as fits on the GPU and the rest on the CPU. To set the split yourself,
+      # e.g. after an out-of-memory error, keep the expert weights of the first
+      # N layers on the CPU (fewer is faster, while it still fits):
+      # LLAMA_ARG_N_CPU_MOE: 16
+      # Required for requests if set; set it before publishing the port below
+      LLAMA_API_KEY: ${API_KEY:-}
+    volumes:
+      - model-cache:/models
+    networks:
+      automod:
+        aliases: [automod]
+    # Only reachable from containers on the automod network, at
+    # http://automod:8080. To reach it from other machines, set API_KEY in .env
+    # and publish the port:
+    # ports:
+    #   - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      # The first start downloads the model (about 19 GB)
+      start_period: 1h
+
+networks:
+  # Other Compose projects on this machine join it to reach the server
+  automod:
+    name: automod
+
+volumes:
+  model-cache:
